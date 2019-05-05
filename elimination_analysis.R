@@ -34,6 +34,11 @@ ggplot(user.level.first, aes(lvl., 1 - norm.score)) +
   geom_bin2d() +
   scale_fill_viridis_c(direction = -1)
 
+generation.user.level.lm <- lm(norm.score ~ mixedWordsLengths + targetLength + minWordFrequency + maxWordFrequency + maxConseqLetter,
+    generation.data[user.level.first, on='lvl.'])
+
+summary(generation.user.level.lm)
+
 ## What factors predict which words are selected
 # unravel the challenge potential word list
 challenge.data.words <- challenge.data[, .(word = unlist(strsplit(as.character(allPossibleWords), ' '))), by=.(lvl., ch.)]
