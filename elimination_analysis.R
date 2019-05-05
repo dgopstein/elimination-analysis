@@ -9,17 +9,34 @@ challenge.data <- data.table(read.csv('DanData/ChallengeData.csv'))
 user.level.data <- data.table(read.csv('DanData/userLevelData.csv'))
 user.challenge.data <- data.table(read.csv('DanData/userChallengeData.csv'))
 
-## Do generation parameters predict actualy performance (sawtooth graph)
-ggplot(user.level.data) +
-  stat_summary(aes(lvl., totalScore, color=isBrowser),
-               fun.y = function(x) mean(x), 
-               geom = "line")
+user.level.data.full <- level.data[user.level.data, on='lvl.']
 
-ggplot(user.level.data) +
-  stat_summary(aes(lvl., numSolvedChallenges, color=isBrowser), 
-               fun.y = function(x) mean(x), 
-               geom = "line")
+#user.level.data.agg <- user.level.data.full[, .(user.count=.N, mean.norm.score = mean(totalScore / maxScore)), by=.(lvl.)]
+user.level.data.agg <- user.level.data.full[,.(lvl.,totalScore,maxScore),by=.(user.id, lvl.)]
+
+# only keep the first time a player reaches a specific level
+user.level.first <- user.level.data.full[, .(totalScore=totalScore[1L], maxScore=maxScore[1L]), .(userID, lvl.)]
+user.level.first[, norm.score := totalScore/maxScore]
+
+user.level.first.agg <- user.level.first[, .(user.count=.N, mean.norm.score = mean(totalScore / maxScore)), by=.(lvl.)]
+
+## Do generation parameters predict actualy performance (sawtooth graph)
+ggplot(user.level.first.agg) +
+  geom_line(aes(lvl., 1 - mean.norm.score)) +
+  #geom_point(aes(x=lvl., y=1-mean.norm.score, size=user.count)) +
+  geom_text(aes(x=lvl., y=1-mean.norm.score, label=user.count, color='w')) +
+  geom_vline(xintercept=c(5, 10, 15, 20, 25))
+
+ggplot(user.level.first, aes(lvl., 1 - norm.score)) +
+  #geom_density_2d() +
+  #stat_density_2d(aes(fill=..level..), geom='polygon') +
+  #geom_tile() +
+  geom_bin2d() +
+  scale_fill_viridis_c(direction = -1)
 
 ## What factors predict which words are selected
+# unravel the challenge potential word list
+challenge.data.words <- challenge.data[, .(word = unlist(strsplit(as.character(allPossibleWords), ' '))), by=.(lvl., ch.)]
 
 
+merge(user.challenge.data, challenge.data.words, by=c('lvl.', 'ch.'), allow.cartesian = TRUE)
