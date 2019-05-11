@@ -55,7 +55,8 @@ unspace <- function(s) unlist(strsplit(as.character(s), ' '))
 challenge.data.words <-
   challenge.data[, .(word = unspace(allPossibleWords),
                      splitDistance = as.integer(unspace(splitDistanceBetweenLetters)),
-                     maxSequence = as.integer(unspace(maxSequenceLetters))
+                     maxSequence = as.integer(unspace(maxSequenceLetters)),
+                     has2X = as.logical(unspace(has2X))
                      ), by=.(lvl., ch.)]
 
 user.challenge.words <- merge(user.challenge.data, challenge.data.words, by=c('lvl.', 'ch.'), allow.cartesian = TRUE)
@@ -71,7 +72,7 @@ selected.glm <- glm(selected ~ splitDistance + maxSequence + str.len, "binomial"
 selected.glm$aic
 # 252683.2
 summary(selected.glm)
-plot(selected.glm)
+#plot(selected.glm)
 
 library(tree)
 tree.totalScore <- tree(totalScore ~ totalTime + numSolvedChallenges + maxScore, user.level.data.full)
@@ -119,11 +120,31 @@ summary(selected.rate.lm)
 
 user.challenge.full[selectedWord == 'zygoma']
 
+# What changes when users replay the same challenge
+
+user.complete.replays <- user.challenge.full[ch.==0, .N, by=.(userID, lvl., ch.)][N>1]
+
+user.level.replays <- user.complete.replays[, -c('ch.', 'N')][user.level.data.full, on=.(userID, lvl.)]
+
+user.level.replays <- user.level.replays[, attempt := 1:.N, by=.(userID, lvl.)]
+
+# Score
+ggplot(user.level.replays[lvl.==1]) +
+  geom_line(aes(attempt, totalScore/maxScore, group=userID, color=as.character(userID))) +
+  xlim(1, 10) +
+  theme(legend.position = "none")
+
+ggplot(user.level.replays[lvl.==1]) +
+  geom_line(aes(attempt, totalTime / maxTime, group=userID, color=as.character(userID))) +
+  xlim(1, 10) +
+  theme(legend.position = "none")
 
 
+#### How often are words selected in a challenge
 
+user.challenge.selected.rate <- user.challenge.words[str.len > 0, .(selected.rate = sum(selected) / .N) , by=.(lvl., ch., word, str.len, splitDistance, maxSequence, has2X)]
 
+user.challenge.selected.rate[challenge.data[, .(lvl., ch., challengeWord, X2XLetter)], ]
 
-
-
-
+user.challenge.selected.rate.lm <- lm(selected.rate ~ str.len + maxSequence + has2X, user.challenge.selected.rate)
+summary(user.challenge.selected.rate.lm)
