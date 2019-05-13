@@ -1,5 +1,6 @@
 library(data.table)
 library(ggplot2)
+library(viridis)
 
 setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
 
@@ -19,6 +20,7 @@ trim <- function (x) gsub("^\\s+|\\s+$", "", x)
 user.challenge.data[, selectedWord := trim(selectedWord)]
 
 user.level.data.full <- level.data[user.level.data, on='lvl.']
+user.level.data.full[, scoreRate := totalScore/maxScore]
 
 #user.level.data.agg <- user.level.data.full[, .(user.count=.N, mean.norm.score = mean(totalScore / maxScore)), by=.(lvl.)]
 user.level.data.agg <- user.level.data.full[,.(lvl.,totalScore,maxScore),by=.(userID, lvl.)]
@@ -56,7 +58,10 @@ challenge.data.words <-
   challenge.data[, .(word = unspace(allPossibleWords),
                      splitDistance = as.integer(unspace(splitDistanceBetweenLetters)),
                      maxSequence = as.integer(unspace(maxSequenceLetters)),
-                     has2X = as.logical(unspace(has2X))
+                     has2X = as.logical(unspace(has2X)),
+                     firstIndex = as.integer(unspace(firstIndex)),
+                     challengeWord,
+                     X2XLetter
                      ), by=.(lvl., ch.)]
 
 user.challenge.words <- merge(user.challenge.data, challenge.data.words, by=c('lvl.', 'ch.'), allow.cartesian = TRUE)
@@ -142,9 +147,56 @@ ggplot(user.level.replays[lvl.==1]) +
 
 #### How often are words selected in a challenge
 
-user.challenge.selected.rate <- user.challenge.words[str.len > 0, .(selected.rate = sum(selected) / .N) , by=.(lvl., ch., word, str.len, splitDistance, maxSequence, has2X)]
+user.challenge.selected.rate <- user.challenge.words[str.len > 0, .(selected.rate = sum(selected) / .N) , by=.(lvl., ch., word, str.len, splitDistance, maxSequence, firstIndex, has2X, challengeWord, X2XLetter)]
+user.challenge.selected.rate[, word.idx := gregexpr(pattern=word,challengeWord)[[1]][1]]
+
 
 user.challenge.selected.rate[challenge.data[, .(lvl., ch., challengeWord, X2XLetter)], ]
 
 user.challenge.selected.rate.lm <- lm(selected.rate ~ str.len + maxSequence + has2X, user.challenge.selected.rate)
 summary(user.challenge.selected.rate.lm)
+
+
+# plot of players over each level
+
+user.level.data.all.lvls <- user.level.data.full[user.level.data.full[lvl.==9, userID, by=userID],,on=.(userID)]
+user.level.data.all.lvls[, userID := as.factor(userID)]
+
+ggplot(user.level.data.all.lvls) +
+  geom_line(aes(lvl., totalScore/maxScore, group = userID, color=userID)) +
+  theme(legend.position = "none")
+
+# Correlation between first level score and levels completed
+
+user.last.level <- user.level.data.full[, .(max.lvl. = max(lvl.)), by=.(userID)]
+user.last.level <- user.level.data.full[lvl.== 0, .(userID, firstLevelScoreRate = scoreRate)][user.last.level, on=.(userID)]
+
+ggplot(user.last.level, aes(x = firstLevelScoreRate, y = max.lvl.)) +
+  geom_density_2d() +
+  stat_density_2d(aes(fill = stat(density)), geom = "raster", contour = FALSE, n=30, h=.01*c(1,30)) +
+  #xlim(0,1) +
+  scale_fill_viridis()
+
+# how many users make it to each level
+user.last.level.sum <- user.last.level[, .N, by=.(max.lvl.)][order(max.lvl.)]
+user.last.level.sum[, quit.rate := N / (1225 - cumsum(N) + N)]
+ggplot(user.last.level.sum) + geom_col(aes(max.lvl., quit.rate))
+
+# Average score per level
+user.level.quantiles <- 
+  user.level.data.full[, .(quantiles = quantile(.SD$scoreRate, probs = c(.5, .75, .25)),
+                           score = c(mean(scoreRate), max(scoreRate), min(scoreRate)),
+                           score.type=c('mean', 'high', 'low')), by=.(lvl.)]
+
+user.last.level.sum[, max.lvl.inc := max.lvl.+1]
+
+ggplot(user.level.quantiles) +
+  geom_line(aes(lvl., 1-quantiles, group=score.type, color=score.type)) +
+  geom_col(aes(max.lvl.inc, quit.rate), data=user.last.level.sum)
+
+user.level.quantiles <- merge(user.level.quantiles, user.last.level.sum, by.x='lvl.', by.y='max.lvl.')
+
+with(user.level.quantiles[score.type=='mean'], cor(quantiles, quit.rate))
+
+ggplot(user.level.quantiles[score.type=='low'], aes(quantiles, quit.rate)) +
+  geom_point()
