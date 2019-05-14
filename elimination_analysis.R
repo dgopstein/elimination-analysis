@@ -1,6 +1,8 @@
 library(data.table)
 library(ggplot2)
 library(viridis)
+library(relaimpo)
+library(cowplot)
 
 setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
 
@@ -15,6 +17,11 @@ trigram.entropy.data <- data.table(read.csv('trigram-entropy.csv'))
 
 
 colnames(bad.word.data) <- 'word'
+
+challenge.data[, challenge.time := (30 / (1 + (ch. / 5)))]
+
+unspace.lst <- function(s) strsplit(as.character(s), ' ')
+unspace <- function(s) unlist(unspace.lst(s))
 
 trim <- function (x) gsub("^\\s+|\\s+$", "", x)
 user.challenge.data[, selectedWord := trim(selectedWord)]
@@ -31,12 +38,23 @@ user.level.first[, norm.score := totalScore/maxScore]
 
 user.level.first.agg <- user.level.first[, .(user.count=.N, mean.norm.score = mean(totalScore / maxScore)), by=.(lvl.)]
 
+user.level.first.agg
+
 ## Do generation parameters predict actual performance (sawtooth graph)
+average.inferred.difficulty.per.level.plot <-
 ggplot(user.level.first.agg) +
-  geom_line(aes(lvl., 1 - mean.norm.score)) +
+  #geom_smooth(aes(lvl., mean.norm.score, size=user.count / 5), span=.2) +
+  geom_line(aes(lvl.+1, 1-mean.norm.score, size=user.count / 5)) +
+  scale_size_continuous(range=c(.2,3)) +
   #geom_point(aes(x=lvl., y=1-mean.norm.score, size=user.count)) +
-  geom_text(aes(x=lvl., y=1-mean.norm.score, label=user.count, color='w')) +
-  geom_vline(xintercept=c(5, 10, 15, 20, 25))
+  #geom_text(aes(x=lvl., y=1-mean.norm.score, label=user.count, color='w')) +
+  geom_vline(xintercept=c(5, 10, 15, 20, 25), color='#888888', linetype='longdash') +
+  theme(legend.position = "none") +
+  labs(x='Level', y='Inferred Difficulty\n[1 - mean(Score)]') + 
+  ggtitle('Average Inferred Difficulty per Level')
+average.inferred.difficulty.per.level.plot
+
+ggsave("img/average_infrerred_difficulty_per_level.pdf", average.inferred.difficulty.per.level.plot, width=(width<-140), height=width*0.7, units = "mm")
 
 ggplot(user.level.first, aes(lvl., 1 - norm.score)) +
   #geom_density_2d() +
@@ -45,15 +63,38 @@ ggplot(user.level.first, aes(lvl., 1 - norm.score)) +
   geom_bin2d() +
   scale_fill_viridis_c(direction = -1)
 
-generation.user.level.lm <- lm(norm.score ~ mixedWordsLengths + targetLength + minWordFrequency + maxWordFrequency + maxConseqLetter,
-    generation.data[user.level.first, on='lvl.'])
+user.generation.data <- generation.data[user.level.first, on='lvl.']
+table(user.generation.data[, .(mixedWordsLengths, targetLength)])
+
+user.generation.data[, minSourceWord := as.integer(unlist(lapply(unspace.lst(mixedWordsLengths), `[[`, 2)))]
+user.generation.data[, nSourceWords := unlist(lapply(unspace.lst(mixedWordsLengths), length))]
+
+generation.user.level.lm <- lm(norm.score ~ minWordFrequency + targetLength + 
+                                 maxConseqLetter + minSourceWord,
+                               user.generation.data)
 
 summary(generation.user.level.lm)
+relImportance <- calc.relimp(generation.user.level.lm, type = "lmg", rela = TRUE)
+sort(relImportance$lmg)
+plot(relImportance)
+
+data.table(relImportance$lmg)
+score.features.rel.importance.plot <-
+ggplot(data.table(relImportance$lmg), aes(as.factor(1:4), V1*100)) +
+  geom_col(fill='#dddddd', color='black') +
+  scale_x_discrete(labels=c("Min Word Freq", "Target Len", "Max Consec Char", "Min Src Word")) +
+  theme(axis.text.x = element_text(angle=360, vjust=0)) +
+  labs(y=bquote('% of '~R^2), x = 'Predictive Feature') +
+  ggtitle('Relative Importance of Features\nPredicting Normalized Score')
+score.features.rel.importance.plot
+
+ggsave("img/score_features_rel_importance.pdf", score.features.rel.importance.plot, width=(width<-150), height=width*0.7, units = "mm")
+
 
 ## What factors predict which words are selected
 # unravel the challenge potential word list
 challenge.data[100]
-unspace <- function(s) unlist(strsplit(as.character(s), ' '))
+
 challenge.data.words <-
   challenge.data[, .(word = unspace(allPossibleWords),
                      splitDistance = as.integer(unspace(splitDistanceBetweenLetters)),
@@ -61,7 +102,8 @@ challenge.data.words <-
                      has2X = as.logical(unspace(has2X)),
                      firstIndex = as.integer(unspace(firstIndex)),
                      challengeWord,
-                     X2XLetter
+                     X2XLetter,
+                     challenge.time
                      ), by=.(lvl., ch.)]
 
 user.challenge.words <- merge(user.challenge.data, challenge.data.words, by=c('lvl.', 'ch.'), allow.cartesian = TRUE)
@@ -118,10 +160,8 @@ all.words[is.na(entropy), entropy := 0]
 
 all.words
 
-selected.rate.lm <- lm(selected.rate ~ n.shown + english.count + str.len + bad.word + entropy, all.words[n.shown > 500])
-all.words[n.shown > 20]
-
-summary(selected.rate.lm)
+#selected.rate.lm <- lm(selected.rate ~ n.shown + english.count + str.len + bad.word, all.words[n.shown > 500])
+selected.rate.lm <- lm(selected.rate ~ n.shown + str.len + bad.word + entropy, all.words[n.shown > 10])
 
 user.challenge.full[selectedWord == 'zygoma']
 
@@ -147,14 +187,26 @@ ggplot(user.level.replays[lvl.==1]) +
 
 #### How often are words selected in a challenge
 
-user.challenge.selected.rate <- user.challenge.words[str.len > 0, .(selected.rate = sum(selected) / .N) , by=.(lvl., ch., word, str.len, splitDistance, maxSequence, firstIndex, has2X, challengeWord, X2XLetter)]
-user.challenge.selected.rate[, word.idx := gregexpr(pattern=word,challengeWord)[[1]][1]]
+user.challenge.selected.rate <- user.challenge.words[str.len > 0, .(selected.rate = sum(selected) / .N) , by=.(lvl., ch., word, str.len, splitDistance, maxSequence, firstIndex, has2X, challengeWord, X2XLetter, challenge.time)]
+#user.challenge.selected.rate[, word.idx := gregexpr(pattern=word,challengeWord)[[1]][1]]
 
+user.challenge.selected.rate[bad.word.data, bad.word := TRUE, on='word']  
+user.challenge.selected.rate[is.na(bad.word), bad.word := FALSE]
+#user.challenge.selected.rate[challenge.data[, .(lvl., ch., challengeWord, X2XLetter)], ]
 
-user.challenge.selected.rate[challenge.data[, .(lvl., ch., challengeWord, X2XLetter)], ]
+user.challenge.selected.rate$challenge.time
 
-user.challenge.selected.rate.lm <- lm(selected.rate ~ str.len + maxSequence + has2X, user.challenge.selected.rate)
+#divide word size by maxSeqLenght
+user.challenge.selected.rate[, wordLen := nchar(word)]
+user.challenge.selected.rate[, maxSeqRate := maxSequence / wordLen]
+
+user.challenge.selected.rate.lm <- lm(selected.rate ~ str.len + maxSequence + has2X + splitDistance + firstIndex + bad.word, user.challenge.selected.rate)
 summary(user.challenge.selected.rate.lm)
+
+relImportance <- calc.relimp(user.challenge.selected.rate.lm, type = "lmg", rela = TRUE)
+sort(relImportance$lmg)
+plot(relImportance)
+
 
 
 # plot of players over each level
@@ -200,3 +252,68 @@ with(user.level.quantiles[score.type=='mean'], cor(quantiles, quit.rate))
 
 ggplot(user.level.quantiles[score.type=='low'], aes(quantiles, quit.rate)) +
   geom_point()
+
+# How many users played the game
+length(unique(user.level.data.full$userID))
+
+# Distribution of # of challenges played
+
+user.level.data.full[, .(sumSolvedChallenges = sum(numSolvedChallenges)), by=userID][order(sumSolvedChallenges)]
+user.level.data.full[userID == 3891308997][, .N, by=.(lvl.)]
+?hist
+hist(user.level.data.full[, .(sumSolvedChallenges = sum(numSolvedChallenges)), by=userID][sumSolvedChallenges <= 300]$sumSolvedChallenges,
+     breaks = seq(0, 300, 10),
+     main = "Number of challenges solved by players",
+     xlab = "# of challenges solved")
+
+n.challenges.per.user.hist.plot <- ggplot(user.level.data.full[, .(sumSolvedChallenges = sum(numSolvedChallenges)), by=userID][sumSolvedChallenges <= 300]) +
+  labs(x='# of challenges solved', y='Frequency') + 
+  ggtitle('Histogram of challenges solved by players') +
+  geom_histogram(aes(sumSolvedChallenges), colour = '#99aacc', fill = '#cccccc')
+n.challenges.per.user.hist.plot
+ggsave("img/n_challenges_per_user_hist.pdf", n.challenges.per.user.hist.plot, width=(width<-140), height=width*0.7, units = "mm")
+
+user.challenge.full[, .N, by=userID][order(N)][, .(mean(N), median(N))]
+
+# Challenge time
+mean(user.level.data.full$totalTime)
+unique(user.level.data.full$maxTime)
+
+ggplot(user.level.data.full, aes(totalTime, scoreRate)) +
+  geom_density_2d() +
+  stat_density_2d(aes(fill = stat(density)), geom = "raster", contour = FALSE) +
+  scale_fill_viridis()
+
+# Length of selected word
+user.challenge.full[, challengeWord := trim(challengeWord)]
+user.challenge.full[, selectedWord := trim(selectedWord)]
+
+user.challenge.full[, selectedLen := nchar(selectedWord)]
+user.challenge.full[, challengeLen := nchar(as.character(challengeWord))]
+user.challenge.full[, selectedLenRate := selectedLen/challengeLen]
+
+ggplot(user.challenge.full[challengeLen==11], aes(selectedLen)) +
+  geom_histogram()
+
+user.challenge.full[, .(challengeWord, challengeLen, selectedWord, selectedLen)]
+
+# Which level has sex
+user.challenge.full[selectedWord=='sex', .N, by=.(lvl., ch.)]
+
+user.challenge.full[lvl. == 0 & ch. == 2, .N, by=selectedWord][, .(selectedWord, N =N / sum(N))]
+
+# How many users reached each level
+
+level.users <- user.level.data.full[, .(N = length(unique(userID))), by=.(lvl.)]
+
+n.users.per.level.plot <- ggplot(level.users) +
+  geom_col(aes(lvl., N), colour = '#99aacc', fill = '#cccccc') +
+  labs(x='Level', y='# Players') + 
+  ggtitle('How Many Players Reached Each Level')
+
+n.users.per.level.plot
+  
+ggsave("img/n_users_per_level_plot.pdf", n.users.per.level.plot, width=(width<-140), height=width*0.7, units = "mm")
+
+
+
