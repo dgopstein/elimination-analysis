@@ -15,6 +15,7 @@ word.count.data <- data.table(read.csv('DanData/wordCount.csv'))
 bad.word.data <- data.table(read.csv('DanData/badWords.txt', header=FALSE))
 trigram.entropy.data <- data.table(read.csv('trigram-entropy.csv'))
 
+generation.data[level.data, num2X := X.2x, on=.(lvl.)]
 
 colnames(bad.word.data) <- 'word'
 
@@ -69,8 +70,8 @@ table(user.generation.data[, .(mixedWordsLengths, targetLength)])
 user.generation.data[, minSourceWord := as.integer(unlist(lapply(unspace.lst(mixedWordsLengths), `[[`, 2)))]
 user.generation.data[, nSourceWords := unlist(lapply(unspace.lst(mixedWordsLengths), length))]
 
-generation.user.level.lm <- lm(norm.score ~ minWordFrequency + targetLength + 
-                                 maxConseqLetter + minSourceWord,
+generation.user.level.lm <- lm(norm.score ~ minWordFrequency + maxConseqLetter +
+                                 targetLength + num2X + minSourceWord,
                                user.generation.data)
 
 summary(generation.user.level.lm)
@@ -223,16 +224,31 @@ ggplot(user.level.data.all.lvls) +
 user.last.level <- user.level.data.full[, .(max.lvl. = max(lvl.)), by=.(userID)]
 user.last.level <- user.level.data.full[lvl.== 0, .(userID, firstLevelScoreRate = scoreRate)][user.last.level, on=.(userID)]
 
-ggplot(user.last.level, aes(x = firstLevelScoreRate, y = max.lvl.)) +
-  geom_density_2d() +
-  stat_density_2d(aes(fill = stat(density)), geom = "raster", contour = FALSE, n=30, h=.01*c(1,30)) +
-  #xlim(0,1) +
-  scale_fill_viridis()
+first.score.vs.last.level.plot <-
+  ggplot(user.last.level, aes(x = firstLevelScoreRate, y = max.lvl.)) +
+    geom_density_2d() +
+    stat_density_2d(aes(fill = stat(density)), geom = "raster", contour = FALSE, n=30, h=.05*c(1,30)) +
+    theme(legend.position = "none") +
+    labs(x = 'First Level Score', y = 'Highest Level Reached') +
+    ggtitle('Relationship Between\nEarly Scores and Longevity') +
+    scale_fill_viridis(trans='sqrt')
+
+first.score.vs.last.level.plot
+
+ggsave("img/first_score_vs_last_level.pdf", first.score.vs.last.level.plot, width=(width<-120), height=width*1.0, units = "mm")
+
+  
+with(user.last.level, cor(firstLevelScoreRate, max.lvl., use = "complete.obs"))
+
+cor(user.last.level$firstLevelScoreRate, user.last.level$max.lvl., use = "complete.obs")
+
 
 # how many users make it to each level
 user.last.level.sum <- user.last.level[, .N, by=.(max.lvl.)][order(max.lvl.)]
-user.last.level.sum[, quit.rate := N / (1225 - cumsum(N) + N)]
+user.last.level.sum[, quit.rate := N / (sum(N) - cumsum(N) + N)]
 ggplot(user.last.level.sum) + geom_col(aes(max.lvl., quit.rate))
+
+user.last.level.sum[, max.lvl.inc := max.lvl.+1]
 
 # Average score per level
 user.level.quantiles <- 
@@ -240,15 +256,30 @@ user.level.quantiles <-
                            score = c(mean(scoreRate), max(scoreRate), min(scoreRate)),
                            score.type=c('mean', 'high', 'low')), by=.(lvl.)]
 
-user.last.level.sum[, max.lvl.inc := max.lvl.+1]
+#fst.axis.color <- '#617d5f'
+#sec.axis.color <- '#79171a'
+fst.axis.color <- sec.axis.color <- 'black'
+level.difficulty.vs.quit.rate.plot <-
+ggplot(user.level.quantiles[score.type=='mean']) +
+  geom_line(aes(lvl., 1-quantiles), color=fst.axis.color) + #, group=score.type, color=score.type)) +
+  geom_line(aes(max.lvl., quit.rate), linetype='longdash', color=sec.axis.color, data=user.last.level.sum) +
+  scale_y_continuous('Inferred Difficulty\n[1 - mean(Score)]', limits=c(0,1),
+                     sec.axis = sec_axis(~ . * 1.0, name = "Quit Rate")) +
+  theme(axis.line.y.right = element_line(color = sec.axis.color), axis.ticks.y.right = element_line(color = sec.axis.color),
+        axis.line.y.left  = element_line(color = fst.axis.color), axis.ticks.y.left  = element_line(color = fst.axis.color)) +
+  labs(x='Level') + 
+  ggtitle('Level Difficulty vs Quit Rate') +
+  scale_linetype_manual("Variabler",values=c("Antal Kassor"=2,"Medelvärde"=1)) +
+  guides(inetype=guide_legend(keywidth = 3, keyheight = 1))
 
-ggplot(user.level.quantiles) +
-  geom_line(aes(lvl., 1-quantiles, group=score.type, color=score.type)) +
-  geom_col(aes(max.lvl.inc, quit.rate), data=user.last.level.sum)
+level.difficulty.vs.quit.rate.plot
+
+ggsave("img/level_difficulty_vs_quit_rate.pdf", level.difficulty.vs.quit.rate.plot, width=(width<-140), height=width*0.7, units = "mm")
+
 
 user.level.quantiles <- merge(user.level.quantiles, user.last.level.sum, by.x='lvl.', by.y='max.lvl.')
 
-with(user.level.quantiles[score.type=='mean'], cor(quantiles, quit.rate))
+with(user.level.quantiles[score.type=='mean'], cor(1-quantiles, quit.rate))
 
 ggplot(user.level.quantiles[score.type=='low'], aes(quantiles, quit.rate)) +
   geom_point()
